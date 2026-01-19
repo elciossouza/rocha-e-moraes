@@ -295,7 +295,51 @@ def create_roas_line_chart(receita_df, investimento_por_mes):
 
 def is_google_ads_configured():
     """Verifica se o Google Ads está configurado"""
-    return gads.is_google_ads_configured()
+    try:
+        # Primeiro tenta nos Secrets do Streamlit
+        if hasattr(st, 'secrets') and st.secrets is not None:
+            has_token = "GOOGLE_ADS_DEVELOPER_TOKEN" in st.secrets and st.secrets["GOOGLE_ADS_DEVELOPER_TOKEN"]
+            has_client_id = "GOOGLE_ADS_CLIENT_ID" in st.secrets and st.secrets["GOOGLE_ADS_CLIENT_ID"]
+            has_secret = "GOOGLE_ADS_CLIENT_SECRET" in st.secrets and st.secrets["GOOGLE_ADS_CLIENT_SECRET"]
+            has_refresh = "GOOGLE_ADS_REFRESH_TOKEN" in st.secrets and st.secrets["GOOGLE_ADS_REFRESH_TOKEN"]
+            has_customer = "GOOGLE_ADS_CUSTOMER_ID" in st.secrets and st.secrets["GOOGLE_ADS_CUSTOMER_ID"]
+            
+            if has_token and has_client_id and has_secret and has_refresh and has_customer:
+                return True
+        
+        # Fallback para config.py
+        return bool(
+            hasattr(config, 'GOOGLE_ADS_DEVELOPER_TOKEN') and config.GOOGLE_ADS_DEVELOPER_TOKEN and
+            hasattr(config, 'GOOGLE_ADS_CLIENT_ID') and config.GOOGLE_ADS_CLIENT_ID and
+            hasattr(config, 'GOOGLE_ADS_CLIENT_SECRET') and config.GOOGLE_ADS_CLIENT_SECRET and
+            hasattr(config, 'GOOGLE_ADS_REFRESH_TOKEN') and config.GOOGLE_ADS_REFRESH_TOKEN and
+            hasattr(config, 'GOOGLE_ADS_CUSTOMER_ID') and config.GOOGLE_ADS_CUSTOMER_ID
+        )
+    except:
+        return False
+
+
+def get_google_ads_debug_info():
+    """Retorna informações de debug do Google Ads"""
+    info = {}
+    try:
+        if hasattr(st, 'secrets') and st.secrets is not None:
+            info["developer_token"] = "✅" if "GOOGLE_ADS_DEVELOPER_TOKEN" in st.secrets and st.secrets["GOOGLE_ADS_DEVELOPER_TOKEN"] else "❌"
+            info["client_id"] = "✅" if "GOOGLE_ADS_CLIENT_ID" in st.secrets and st.secrets["GOOGLE_ADS_CLIENT_ID"] else "❌"
+            info["client_secret"] = "✅" if "GOOGLE_ADS_CLIENT_SECRET" in st.secrets and st.secrets["GOOGLE_ADS_CLIENT_SECRET"] else "❌"
+            info["refresh_token"] = "✅" if "GOOGLE_ADS_REFRESH_TOKEN" in st.secrets and st.secrets["GOOGLE_ADS_REFRESH_TOKEN"] else "❌"
+            info["customer_id"] = st.secrets.get("GOOGLE_ADS_CUSTOMER_ID", "N/A")
+            info["fonte"] = "Streamlit Secrets"
+        else:
+            info["developer_token"] = "✅" if hasattr(config, 'GOOGLE_ADS_DEVELOPER_TOKEN') and config.GOOGLE_ADS_DEVELOPER_TOKEN else "❌"
+            info["client_id"] = "✅" if hasattr(config, 'GOOGLE_ADS_CLIENT_ID') and config.GOOGLE_ADS_CLIENT_ID else "❌"
+            info["client_secret"] = "✅" if hasattr(config, 'GOOGLE_ADS_CLIENT_SECRET') and config.GOOGLE_ADS_CLIENT_SECRET else "❌"
+            info["refresh_token"] = "✅" if hasattr(config, 'GOOGLE_ADS_REFRESH_TOKEN') and config.GOOGLE_ADS_REFRESH_TOKEN else "❌"
+            info["customer_id"] = getattr(config, 'GOOGLE_ADS_CUSTOMER_ID', 'N/A')
+            info["fonte"] = "config.py"
+    except Exception as e:
+        info["erro"] = str(e)
+    return info
 
 
 # ===========================================
@@ -354,7 +398,7 @@ with st.sidebar:
     
     # DEBUG - Google Ads
     with st.expander("🔧 Debug Google Ads"):
-        debug_gads = gads.debug_google_ads_connection()
+        debug_gads = get_google_ads_debug_info()
         for key, value in debug_gads.items():
             st.write(f"**{key}:** {value}")
     
