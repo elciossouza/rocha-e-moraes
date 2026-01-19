@@ -16,20 +16,24 @@ def get_meta_credentials():
     """
     Obtém as credenciais do Meta Ads dos secrets ou variáveis de ambiente
     """
-    access_token = None
-    ad_account_id = None
+    access_token = ""
+    ad_account_id = ""
     
+    # Tenta obter dos secrets do Streamlit
     try:
         if hasattr(st, 'secrets'):
-            access_token = st.secrets.get("META_ACCESS_TOKEN", "")
-            ad_account_id = st.secrets.get("META_AD_ACCOUNT_ID", "")
-    except:
+            if "META_ACCESS_TOKEN" in st.secrets:
+                access_token = st.secrets["META_ACCESS_TOKEN"]
+            if "META_AD_ACCOUNT_ID" in st.secrets:
+                ad_account_id = st.secrets["META_AD_ACCOUNT_ID"]
+    except Exception as e:
         pass
     
+    # Fallback para config
     if not access_token:
-        access_token = config.META_ACCESS_TOKEN
+        access_token = getattr(config, 'META_ACCESS_TOKEN', '')
     if not ad_account_id:
-        ad_account_id = config.META_AD_ACCOUNT_ID
+        ad_account_id = getattr(config, 'META_AD_ACCOUNT_ID', '')
     
     return access_token, ad_account_id
 
@@ -39,7 +43,7 @@ def is_meta_configured():
     Verifica se as credenciais do Meta estão configuradas
     """
     access_token, ad_account_id = get_meta_credentials()
-    return bool(access_token and ad_account_id)
+    return bool(access_token and ad_account_id and len(access_token) > 10 and len(ad_account_id) > 5)
 
 
 @st.cache_data(ttl=300)
@@ -239,7 +243,11 @@ def get_meta_summary(start_date, end_date):
         response = requests.get(url, params=params)
         data = response.json()
         
-        if 'error' in data or 'data' not in data or len(data['data']) == 0:
+        if 'error' in data:
+            st.error(f"Erro Meta API: {data['error'].get('message', 'Erro')}")
+            return None
+            
+        if 'data' not in data or len(data['data']) == 0:
             return None
         
         item = data['data'][0]
@@ -267,6 +275,7 @@ def get_meta_summary(start_date, end_date):
         return summary
         
     except Exception as e:
+        st.error(f"Erro: {str(e)}")
         return None
 
 
