@@ -46,12 +46,6 @@ def get_google_sheets_client():
 def parse_date_flexible(date_value):
     """
     Converte diferentes formatos de data para datetime
-    Suporta formatos como:
-    - 2025-12-02T03:52:08.000Z (ISO)
-    - 2025-09-19 09:10:28
-    - NOVEMBRO, Novembro, novembro
-    - 21:06:14.000Z (apenas hora)
-    - Vazio ou None
     """
     if pd.isna(date_value) or date_value is None or str(date_value).strip() == '':
         return None
@@ -67,7 +61,6 @@ def parse_date_flexible(date_value):
     
     date_lower = date_str.lower()
     if date_lower in meses:
-        # Retorna o primeiro dia do mês no ano atual
         return datetime(datetime.now().year, meses[date_lower], 1)
     
     # Lista de formatos para tentar
@@ -107,32 +100,19 @@ def parse_date_flexible(date_value):
         return None
 
 
-@st.cache_data(ttl=300)  # Cache de 5 minutos
+@st.cache_data(ttl=300)
 def get_sheet_data(sheet_name: str) -> pd.DataFrame:
     """
     Busca dados de uma aba específica da planilha
-    
-    Args:
-        sheet_name: Nome da aba na planilha
-        
-    Returns:
-        DataFrame com os dados
     """
     try:
         client = get_google_sheets_client()
         if client is None:
             return pd.DataFrame()
         
-        # Abre a planilha pelo ID
         spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
-        
-        # Abre a aba específica
         worksheet = spreadsheet.worksheet(sheet_name)
-        
-        # Obtém todos os dados
         data = worksheet.get_all_records()
-        
-        # Converte para DataFrame
         df = pd.DataFrame(data)
         
         return df
@@ -164,7 +144,6 @@ def process_dataframe_dates(df: pd.DataFrame) -> pd.DataFrame:
             break
     
     if date_col:
-        # Aplica a função de parse flexível
         df['data_parsed'] = df[date_col].apply(parse_date_flexible)
         df['data'] = df['data_parsed'].apply(lambda x: x.date() if x else None)
         df['mes'] = df['data_parsed'].apply(lambda x: x.month if x else None)
@@ -200,6 +179,33 @@ def identify_platform(origem: str) -> str:
         return 'Google Ads'
     else:
         return 'Outro'
+
+
+def filter_by_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
+    """
+    Filtra DataFrame por período de datas
+    """
+    if df.empty or 'data' not in df.columns:
+        return df
+    
+    df = df.copy()
+    
+    # Remove linhas sem data válida
+    df = df[df['data'].notna()]
+    
+    if df.empty:
+        return df
+    
+    # Converte para date se necessário
+    if hasattr(start_date, 'date'):
+        start_date = start_date.date()
+    if hasattr(end_date, 'date'):
+        end_date = end_date.date()
+    
+    # Aplica o filtro
+    mask = (df['data'] >= start_date) & (df['data'] <= end_date)
+    
+    return df[mask]
 
 
 @st.cache_data(ttl=300)
@@ -242,15 +248,22 @@ def get_contratos_fechados() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=300)
-def get_funnel_data() -> dict:
+def get_funnel_data(start_date=None, end_date=None) -> dict:
     """
     Retorna dados para o funil de conversão
+    Com filtro de data opcional
     """
     leads_df = get_all_leads()
     qualificados_df = get_leads_qualificados()
     desqualificados_df = get_leads_desqualificados()
     convertidos_df = get_contratos_fechados()
+    
+    # Aplica filtro de data se fornecido
+    if start_date is not None and end_date is not None:
+        leads_df = filter_by_date(leads_df, start_date, end_date)
+        qualificados_df = filter_by_date(qualificados_df, start_date, end_date)
+        desqualificados_df = filter_by_date(desqualificados_df, start_date, end_date)
+        convertidos_df = filter_by_date(convertidos_df, start_date, end_date)
     
     return {
         'total_leads': len(leads_df),
@@ -262,29 +275,6 @@ def get_funnel_data() -> dict:
         'desqualificados_df': desqualificados_df,
         'convertidos_df': convertidos_df
     }
-
-
-def filter_by_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
-    """
-    Filtra DataFrame por período de datas
-    """
-    if df.empty or 'data' not in df.columns:
-        return df
-    
-    df = df.copy()
-    
-    # Remove linhas sem data válida
-    df = df[df['data'].notna()]
-    
-    # Converte para date se necessário
-    if hasattr(start_date, 'date'):
-        start_date = start_date.date()
-    if hasattr(end_date, 'date'):
-        end_date = end_date.date()
-    
-    mask = (df['data'] >= start_date) & (df['data'] <= end_date)
-    
-    return df[mask]
 
 
 def filter_by_platform(df: pd.DataFrame, platform: str) -> pd.DataFrame:
@@ -355,7 +345,6 @@ def get_leads_by_date(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or 'data' not in df.columns:
         return pd.DataFrame()
     
-    # Remove linhas sem data
     df_valid = df[df['data'].notna()]
     
     if df_valid.empty:
