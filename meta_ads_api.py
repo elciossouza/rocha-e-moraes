@@ -7,7 +7,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 import config
 
-META_API_URL = "https://graph.facebook.com/v18.0"
+META_API_URL = "https://graph.facebook.com/v21.0"
 
 
 def get_meta_credentials():
