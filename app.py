@@ -1,6 +1,6 @@
 """
 Dashboard de Análise de Ads - Meta Ads e Google Ads
-Com Funil de Conversão Completo
+Com Funil de Conversão Completo e Filtro de Data
 """
 import streamlit as st
 import pandas as pd
@@ -237,12 +237,14 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Últimos 7 dias", use_container_width=True):
-            start_date = datetime.now().date() - timedelta(days=7)
-            end_date = datetime.now().date()
+            st.session_state['start_date'] = datetime.now().date() - timedelta(days=7)
+            st.session_state['end_date'] = datetime.now().date()
+            st.rerun()
     with col2:
         if st.button("Últimos 30 dias", use_container_width=True):
-            start_date = datetime.now().date() - timedelta(days=30)
-            end_date = datetime.now().date()
+            st.session_state['start_date'] = datetime.now().date() - timedelta(days=30)
+            st.session_state['end_date'] = datetime.now().date()
+            st.rerun()
     
     st.markdown("---")
     
@@ -278,7 +280,6 @@ st.markdown(f"""
 # CARREGAR DADOS
 # ===========================================
 
-@st.cache_data(ttl=300)
 def load_data_demo():
     """Dados de demonstração"""
     return {
@@ -292,18 +293,15 @@ def load_data_demo():
         'convertidos_df': pd.DataFrame()
     }
 
-# Carrega dados
+# Carrega dados COM FILTRO DE DATA
 if demo_mode:
     funnel_data = load_data_demo()
     leads_df = pd.DataFrame()
 else:
     try:
-        funnel_data = gs.get_funnel_data()
+        # PASSA AS DATAS PARA O FILTRO
+        funnel_data = gs.get_funnel_data(start_date, end_date)
         leads_df = funnel_data['leads_df']
-        
-        # Filtra por data se possível
-        if not leads_df.empty and 'data' in leads_df.columns:
-            leads_df = gs.filter_by_date(leads_df, start_date, end_date)
             
     except Exception as e:
         st.error(f"Erro ao carregar dados: {str(e)}")
