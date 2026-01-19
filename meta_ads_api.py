@@ -1,344 +1,295 @@
 """
-Módulo de conexão com Meta Ads API (Facebook/Instagram)
-Responsável por buscar métricas de campanhas do Meta Ads
+Módulo de conexão com Meta Ads API
+Responsável por buscar dados de campanhas do Facebook/Instagram Ads
 """
-import pandas as pd
 import requests
+import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
 import config
 
-# URL base da API do Meta/Facebook
-META_API_BASE_URL = "https://graph.facebook.com/v19.0"
+# URL base da API do Meta
+META_API_URL = "https://graph.facebook.com/v18.0"
 
 
-def get_meta_headers() -> dict:
+def get_meta_credentials():
     """
-    Retorna headers para requisições à API do Meta
+    Obtém as credenciais do Meta Ads dos secrets ou variáveis de ambiente
     """
-    return {
-        "Authorization": f"Bearer {config.META_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-
-@st.cache_data(ttl=300)  # Cache de 5 minutos
-def get_meta_ads_metrics(start_date: str, end_date: str) -> dict:
-    """
-    Busca métricas agregadas do Meta Ads para um período
+    access_token = None
+    ad_account_id = None
     
-    Args:
-        start_date: Data inicial no formato 'YYYY-MM-DD'
-        end_date: Data final no formato 'YYYY-MM-DD'
-        
-    Returns:
-        Dicionário com métricas agregadas
-    """
     try:
-        account_id = config.META_AD_ACCOUNT_ID
-        
-        # Endpoint de insights da conta
-        url = f"{META_API_BASE_URL}/{account_id}/insights"
-        
-        params = {
-            "access_token": config.META_ACCESS_TOKEN,
-            "time_range": f'{{"since":"{start_date}","until":"{end_date}"}}',
-            "fields": "spend,impressions,clicks,actions,cost_per_action_type,ctr,cpc",
-            "level": "account"
-        }
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if "data" not in data or len(data["data"]) == 0:
-            return get_empty_metrics()
-        
-        insights = data["data"][0]
-        
-        # Extrai leads das actions
-        leads = 0
-        cost_per_lead = 0
-        
-        if "actions" in insights:
-            for action in insights["actions"]:
-                if action["action_type"] == "lead":
-                    leads = int(action["value"])
-                    break
-        
-        if "cost_per_action_type" in insights:
-            for cost_action in insights["cost_per_action_type"]:
-                if cost_action["action_type"] == "lead":
-                    cost_per_lead = float(cost_action["value"])
-                    break
-        
-        return {
-            "cost": float(insights.get("spend", 0)),
-            "impressions": int(insights.get("impressions", 0)),
-            "clicks": int(insights.get("clicks", 0)),
-            "leads": leads,
-            "ctr": float(insights.get("ctr", 0)),
-            "cpc": float(insights.get("cpc", 0)),
-            "cost_per_lead": cost_per_lead
-        }
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro na requisição à API do Meta: {str(e)}")
-        return get_empty_metrics()
-    except Exception as e:
-        st.error(f"Erro ao buscar métricas do Meta Ads: {str(e)}")
-        return get_empty_metrics()
+        if hasattr(st, 'secrets'):
+            access_token = st.secrets.get("META_ACCESS_TOKEN", "")
+            ad_account_id = st.secrets.get("META_AD_ACCOUNT_ID", "")
+    except:
+        pass
+    
+    if not access_token:
+        access_token = config.META_ACCESS_TOKEN
+    if not ad_account_id:
+        ad_account_id = config.META_AD_ACCOUNT_ID
+    
+    return access_token, ad_account_id
+
+
+def is_meta_configured():
+    """
+    Verifica se as credenciais do Meta estão configuradas
+    """
+    access_token, ad_account_id = get_meta_credentials()
+    return bool(access_token and ad_account_id)
 
 
 @st.cache_data(ttl=300)
-def get_meta_ads_campaigns(start_date: str, end_date: str) -> pd.DataFrame:
+def get_meta_campaigns(start_date, end_date):
     """
-    Busca métricas por campanha do Meta Ads
+    Busca dados de campanhas do Meta Ads
+    
+    Args:
+        start_date: Data inicial (date ou datetime)
+        end_date: Data final (date ou datetime)
     
     Returns:
-        DataFrame com métricas por campanha
+        DataFrame com dados das campanhas
     """
+    access_token, ad_account_id = get_meta_credentials()
+    
+    if not access_token or not ad_account_id:
+        return pd.DataFrame()
+    
+    # Formata as datas
+    if hasattr(start_date, 'strftime'):
+        start_str = start_date.strftime('%Y-%m-%d')
+    else:
+        start_str = str(start_date)
+    
+    if hasattr(end_date, 'strftime'):
+        end_str = end_date.strftime('%Y-%m-%d')
+    else:
+        end_str = str(end_date)
+    
+    # Endpoint para insights de campanhas
+    url = f"{META_API_URL}/{ad_account_id}/insights"
+    
+    params = {
+        'access_token': access_token,
+        'level': 'campaign',
+        'fields': 'campaign_name,campaign_id,spend,impressions,clicks,reach,actions,cost_per_action_type,ctr,cpc',
+        'time_range': f'{{"since":"{start_str}","until":"{end_str}"}}',
+        'time_increment': 1,  # Dados diários
+        'limit': 500
+    }
+    
     try:
-        account_id = config.META_AD_ACCOUNT_ID
-        
-        url = f"{META_API_BASE_URL}/{account_id}/insights"
-        
-        params = {
-            "access_token": config.META_ACCESS_TOKEN,
-            "time_range": f'{{"since":"{start_date}","until":"{end_date}"}}',
-            "fields": "campaign_id,campaign_name,spend,impressions,clicks,actions",
-            "level": "campaign",
-            "limit": 100
-        }
-        
         response = requests.get(url, params=params)
-        response.raise_for_status()
-        
         data = response.json()
         
-        if "data" not in data:
+        if 'error' in data:
+            st.error(f"Erro na API do Meta: {data['error'].get('message', 'Erro desconhecido')}")
             return pd.DataFrame()
         
+        if 'data' not in data or len(data['data']) == 0:
+            return pd.DataFrame()
+        
+        # Processa os dados
         campaigns = []
-        for row in data["data"]:
-            # Extrai leads das actions
-            leads = 0
-            if "actions" in row:
-                for action in row["actions"]:
-                    if action["action_type"] == "lead":
-                        leads = int(action["value"])
-                        break
+        for item in data['data']:
+            campaign = {
+                'campanha': item.get('campaign_name', 'N/A'),
+                'campaign_id': item.get('campaign_id', ''),
+                'data': item.get('date_start', ''),
+                'valor_gasto': float(item.get('spend', 0)),
+                'impressoes': int(item.get('impressions', 0)),
+                'cliques': int(item.get('clicks', 0)),
+                'alcance': int(item.get('reach', 0)),
+                'ctr': float(item.get('ctr', 0)),
+                'cpc': float(item.get('cpc', 0)) if item.get('cpc') else 0,
+            }
             
-            campaigns.append({
-                "id": row.get("campaign_id", ""),
-                "campanha": row.get("campaign_name", "Sem nome"),
-                "custo": float(row.get("spend", 0)),
-                "impressoes": int(row.get("impressions", 0)),
-                "cliques": int(row.get("clicks", 0)),
-                "leads": leads
-            })
+            # Extrai leads das ações
+            actions = item.get('actions', [])
+            leads = 0
+            for action in actions:
+                if action.get('action_type') in ['lead', 'onsite_conversion.lead_grouped', 'offsite_conversion.fb_pixel_lead']:
+                    leads += int(action.get('value', 0))
+            campaign['leads'] = leads
+            
+            # Calcula CPL
+            if leads > 0:
+                campaign['cpl'] = campaign['valor_gasto'] / leads
+            else:
+                campaign['cpl'] = 0
+            
+            campaigns.append(campaign)
         
         df = pd.DataFrame(campaigns)
         
-        if not df.empty:
-            # Ordena por custo (ascending para gráficos de barras)
-            df = df.sort_values('custo', ascending=True)
+        # Converte data
+        if 'data' in df.columns and not df.empty:
+            df['data'] = pd.to_datetime(df['data']).dt.date
         
         return df
         
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro na requisição à API do Meta: {str(e)}")
-        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Erro ao buscar campanhas: {str(e)}")
+        st.error(f"Erro ao conectar com Meta Ads: {str(e)}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
-def get_meta_ads_adsets(start_date: str, end_date: str) -> pd.DataFrame:
+def get_meta_adsets(start_date, end_date):
     """
-    Busca métricas por conjunto de anúncios do Meta Ads
+    Busca dados de conjuntos de anúncios do Meta Ads
+    """
+    access_token, ad_account_id = get_meta_credentials()
     
-    Returns:
-        DataFrame com métricas por conjunto de anúncios
-    """
+    if not access_token or not ad_account_id:
+        return pd.DataFrame()
+    
+    # Formata as datas
+    if hasattr(start_date, 'strftime'):
+        start_str = start_date.strftime('%Y-%m-%d')
+    else:
+        start_str = str(start_date)
+    
+    if hasattr(end_date, 'strftime'):
+        end_str = end_date.strftime('%Y-%m-%d')
+    else:
+        end_str = str(end_date)
+    
+    url = f"{META_API_URL}/{ad_account_id}/insights"
+    
+    params = {
+        'access_token': access_token,
+        'level': 'adset',
+        'fields': 'adset_name,adset_id,campaign_name,spend,impressions,clicks,actions',
+        'time_range': f'{{"since":"{start_str}","until":"{end_str}"}}',
+        'limit': 500
+    }
+    
     try:
-        account_id = config.META_AD_ACCOUNT_ID
-        
-        url = f"{META_API_BASE_URL}/{account_id}/insights"
-        
-        params = {
-            "access_token": config.META_ACCESS_TOKEN,
-            "time_range": f'{{"since":"{start_date}","until":"{end_date}"}}',
-            "fields": "adset_id,adset_name,spend,impressions,clicks,actions",
-            "level": "adset",
-            "limit": 100
-        }
-        
         response = requests.get(url, params=params)
-        response.raise_for_status()
-        
         data = response.json()
         
-        if "data" not in data:
+        if 'error' in data or 'data' not in data:
             return pd.DataFrame()
         
         adsets = []
-        for row in data["data"]:
-            leads = 0
-            if "actions" in row:
-                for action in row["actions"]:
-                    if action["action_type"] == "lead":
-                        leads = int(action["value"])
-                        break
+        for item in data['data']:
+            adset = {
+                'conjunto_anuncios': item.get('adset_name', 'N/A'),
+                'campanha': item.get('campaign_name', 'N/A'),
+                'valor_gasto': float(item.get('spend', 0)),
+                'impressoes': int(item.get('impressions', 0)),
+                'cliques': int(item.get('clicks', 0)),
+            }
             
-            adsets.append({
-                "id": row.get("adset_id", ""),
-                "conjunto_anuncios": row.get("adset_name", "Sem nome"),
-                "custo": float(row.get("spend", 0)),
-                "impressoes": int(row.get("impressions", 0)),
-                "cliques": int(row.get("clicks", 0)),
-                "leads": leads
-            })
+            # Extrai leads
+            actions = item.get('actions', [])
+            leads = 0
+            for action in actions:
+                if action.get('action_type') in ['lead', 'onsite_conversion.lead_grouped', 'offsite_conversion.fb_pixel_lead']:
+                    leads += int(action.get('value', 0))
+            adset['leads'] = leads
+            
+            if leads > 0:
+                adset['cpl'] = adset['valor_gasto'] / leads
+            else:
+                adset['cpl'] = 0
+            
+            adsets.append(adset)
         
-        df = pd.DataFrame(adsets)
+        return pd.DataFrame(adsets)
         
-        if not df.empty:
-            df = df.sort_values('custo', ascending=True)
-        
-        return df
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro na requisição à API do Meta: {str(e)}")
-        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Erro ao buscar conjuntos de anúncios: {str(e)}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
-def get_meta_ads_daily_metrics(start_date: str, end_date: str) -> pd.DataFrame:
+def get_meta_summary(start_date, end_date):
     """
-    Busca métricas diárias do Meta Ads
+    Retorna resumo dos dados do Meta Ads
+    """
+    access_token, ad_account_id = get_meta_credentials()
     
-    Returns:
-        DataFrame com métricas por dia
-    """
+    if not access_token or not ad_account_id:
+        return None
+    
+    # Formata as datas
+    if hasattr(start_date, 'strftime'):
+        start_str = start_date.strftime('%Y-%m-%d')
+    else:
+        start_str = str(start_date)
+    
+    if hasattr(end_date, 'strftime'):
+        end_str = end_date.strftime('%Y-%m-%d')
+    else:
+        end_str = str(end_date)
+    
+    url = f"{META_API_URL}/{ad_account_id}/insights"
+    
+    params = {
+        'access_token': access_token,
+        'fields': 'spend,impressions,clicks,reach,actions,ctr,cpc',
+        'time_range': f'{{"since":"{start_str}","until":"{end_str}"}}',
+    }
+    
     try:
-        account_id = config.META_AD_ACCOUNT_ID
-        
-        url = f"{META_API_BASE_URL}/{account_id}/insights"
-        
-        params = {
-            "access_token": config.META_ACCESS_TOKEN,
-            "time_range": f'{{"since":"{start_date}","until":"{end_date}"}}',
-            "fields": "spend,impressions,clicks,actions",
-            "time_increment": 1,  # Diário
-            "level": "account"
-        }
-        
         response = requests.get(url, params=params)
-        response.raise_for_status()
-        
         data = response.json()
         
-        if "data" not in data:
-            return pd.DataFrame()
+        if 'error' in data or 'data' not in data or len(data['data']) == 0:
+            return None
         
-        daily_data = []
-        for row in data["data"]:
-            leads = 0
-            if "actions" in row:
-                for action in row["actions"]:
-                    if action["action_type"] == "lead":
-                        leads = int(action["value"])
-                        break
-            
-            daily_data.append({
-                "data": row.get("date_start", ""),
-                "custo": float(row.get("spend", 0)),
-                "impressoes": int(row.get("impressions", 0)),
-                "cliques": int(row.get("clicks", 0)),
-                "leads": leads
-            })
+        item = data['data'][0]
         
-        df = pd.DataFrame(daily_data)
+        # Extrai leads
+        actions = item.get('actions', [])
+        leads = 0
+        for action in actions:
+            if action.get('action_type') in ['lead', 'onsite_conversion.lead_grouped', 'offsite_conversion.fb_pixel_lead']:
+                leads += int(action.get('value', 0))
         
-        if not df.empty:
-            df['data'] = pd.to_datetime(df['data'])
-            df = df.sort_values('data', ascending=True)
+        valor_gasto = float(item.get('spend', 0))
         
-        return df
+        summary = {
+            'valor_gasto': valor_gasto,
+            'impressoes': int(item.get('impressions', 0)),
+            'cliques': int(item.get('clicks', 0)),
+            'alcance': int(item.get('reach', 0)),
+            'leads': leads,
+            'ctr': float(item.get('ctr', 0)),
+            'cpc': float(item.get('cpc', 0)) if item.get('cpc') else 0,
+            'cpl': valor_gasto / leads if leads > 0 else 0
+        }
         
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro na requisição à API do Meta: {str(e)}")
-        return pd.DataFrame()
+        return summary
+        
     except Exception as e:
-        st.error(f"Erro ao buscar métricas diárias: {str(e)}")
+        return None
+
+
+def get_campaigns_by_name(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agrupa campanhas por nome
+    """
+    if df.empty:
         return pd.DataFrame()
-
-
-def get_empty_metrics() -> dict:
-    """
-    Retorna estrutura vazia de métricas
-    """
-    return {
-        "cost": 0,
-        "impressions": 0,
-        "clicks": 0,
-        "leads": 0,
-        "ctr": 0,
-        "cpc": 0,
-        "cost_per_lead": 0
-    }
-
-
-# ===========================================
-# FUNÇÕES ALTERNATIVAS COM DADOS DE EXEMPLO
-# Use estas quando não tiver acesso à API
-# ===========================================
-
-def get_meta_ads_metrics_demo(start_date: str, end_date: str) -> dict:
-    """
-    Retorna métricas de exemplo para demonstração
-    """
-    return {
-        "cost": 3250.45,
-        "impressions": 125430,
-        "clicks": 4523,
-        "leads": 156,
-        "ctr": 3.61,
-        "cpc": 0.72,
-        "cost_per_lead": 20.84
-    }
-
-
-def get_meta_ads_campaigns_demo() -> pd.DataFrame:
-    """
-    Retorna campanhas de exemplo para demonstração
-    """
-    data = [
-        {"campanha": "Superendividamento", "custo": 1250.50, "impressoes": 45230, "cliques": 1823, "leads": 65},
-        {"campanha": "FGTS - Revisão", "custo": 980.25, "impressoes": 38450, "cliques": 1445, "leads": 48},
-        {"campanha": "Servidor Público", "custo": 620.70, "impressoes": 22920, "cliques": 812, "leads": 28},
-        {"campanha": "Aposentadoria", "custo": 399.00, "impressoes": 18830, "cliques": 443, "leads": 15},
-    ]
-    df = pd.DataFrame(data)
-    df = df.sort_values('custo', ascending=True)
-    return df
-
-
-def get_meta_ads_adsets_demo() -> pd.DataFrame:
-    """
-    Retorna conjuntos de anúncios de exemplo
-    """
-    data = [
-        {"conjunto_anuncios": "CADASTRO | SERVIDORES | BRASIL", "custo": 850.30, "impressoes": 32150, "cliques": 1245, "leads": 42},
-        {"conjunto_anuncios": "LOOKALIKE | 1%", "custo": 720.45, "impressoes": 28430, "cliques": 1023, "leads": 35},
-        {"conjunto_anuncios": "INTERESSE | JURÍDICO", "custo": 480.20, "impressoes": 18920, "cliques": 712, "leads": 24},
-        {"conjunto_anuncios": "RETARGETING | SITE", "custo": 350.00, "impressoes": 12430, "cliques": 543, "leads": 18},
-    ]
-    df = pd.DataFrame(data)
-    df = df.sort_values('custo', ascending=True)
-    return df
+    
+    grouped = df.groupby('campanha').agg({
+        'valor_gasto': 'sum',
+        'impressoes': 'sum',
+        'cliques': 'sum',
+        'leads': 'sum'
+    }).reset_index()
+    
+    # Recalcula CPL
+    grouped['cpl'] = grouped.apply(
+        lambda row: row['valor_gasto'] / row['leads'] if row['leads'] > 0 else 0, 
+        axis=1
+    )
+    
+    grouped = grouped.sort_values('valor_gasto', ascending=True)
+    
+    return grouped
