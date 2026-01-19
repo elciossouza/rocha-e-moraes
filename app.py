@@ -1,6 +1,6 @@
 """
 Dashboard de Análise de Ads - Meta Ads e Google Ads
-Com Funil de Conversão Completo e Filtro de Data
+Com Funil de Conversão e Dados da API do Meta
 """
 import streamlit as st
 import pandas as pd
@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 # Importa módulos locais
 import config
 import google_sheets as gs
+import meta_ads_api as meta
 
 # ===========================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -86,6 +87,22 @@ st.markdown("""
     .funnel-label { font-size: 0.9rem; opacity: 0.9; text-transform: uppercase; letter-spacing: 1px; }
     .funnel-percent { font-size: 1rem; opacity: 0.8; margin-top: 8px; }
     
+    .meta-card {
+        background: linear-gradient(135deg, #0668E1 0%, #0552b5 100%);
+        color: white;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 4px 20px rgba(6, 104, 225, 0.3);
+    }
+    
+    .google-card {
+        background: linear-gradient(135deg, #4285F4 0%, #3367d6 100%);
+        color: white;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 4px 20px rgba(66, 133, 244, 0.3);
+    }
+    
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -99,6 +116,9 @@ st.markdown("""
 def format_number(value: int) -> str:
     return f"{value:,}".replace(",", ".")
 
+def format_currency(value: float) -> str:
+    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 def format_percentage(value: float) -> str:
     return f"{value:.1f}%"
 
@@ -107,6 +127,14 @@ def create_metric_card(label: str, value: str, icon: str = "") -> str:
     <div class="metric-card">
         <p class="metric-value">{icon} {value}</p>
         <p class="metric-label">{label}</p>
+    </div>
+    """
+
+def create_colored_metric_card(label: str, value: str, icon: str, bg_color: str) -> str:
+    return f"""
+    <div style="background: {bg_color}; color: white; border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+        <p style="font-size: 2rem; font-weight: 700; margin: 0;">{icon} {value}</p>
+        <p style="font-size: 0.85rem; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 8px;">{label}</p>
     </div>
     """
 
@@ -152,6 +180,9 @@ def create_funnel_chart(funnel_data: dict) -> go.Figure:
 def create_bar_chart(df: pd.DataFrame, x: str, y: str, title: str, color: str) -> go.Figure:
     """Cria gráfico de barras horizontal"""
     
+    if df.empty:
+        return go.Figure()
+    
     fig = px.bar(
         df.sort_values(y, ascending=True),
         x=y,
@@ -169,13 +200,16 @@ def create_bar_chart(df: pd.DataFrame, x: str, y: str, title: str, color: str) -
         xaxis=dict(showgrid=True, gridcolor='#e9ecef'),
         yaxis=dict(showgrid=False),
         margin=dict(l=20, r=20, t=50, b=20),
-        height=350
+        height=400
     )
     
     return fig
 
 def create_line_chart(df: pd.DataFrame, x: str, y: str, title: str, color: str) -> go.Figure:
     """Cria gráfico de linha"""
+    
+    if df.empty:
+        return go.Figure()
     
     fig = px.line(
         df,
@@ -248,19 +282,21 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Modo Demo
-    st.markdown("### ⚙️ Configurações")
-    demo_mode = st.toggle("Modo Demonstração", value=False, help="Usa dados de exemplo quando ativado")
+    # Status das conexões
+    st.markdown("### 🔗 Conexões")
+    
+    meta_ok = meta.is_meta_configured()
+    
+    if meta_ok:
+        st.success("✅ Meta Ads conectado")
+    else:
+        st.warning("⚠️ Meta Ads não configurado")
     
     st.markdown("---")
     
-    st.markdown("""
-    <div style="padding: 16px; background: #f8f9fa; border-radius: 12px; font-size: 0.85rem;">
-        <p style="margin: 0; color: #6c757d;">
-            <strong>💡 Dica:</strong> Desative o modo demonstração para ver os dados reais da planilha.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Modo Demo
+    st.markdown("### ⚙️ Configurações")
+    demo_mode = st.toggle("Modo Demonstração", value=False, help="Usa dados de exemplo quando ativado")
 
 
 # ===========================================
@@ -293,21 +329,93 @@ def load_data_demo():
         'convertidos_df': pd.DataFrame()
     }
 
-# Carrega dados COM FILTRO DE DATA
+# Carrega dados
 if demo_mode:
     funnel_data = load_data_demo()
     leads_df = pd.DataFrame()
+    meta_summary = None
+    meta_campaigns = pd.DataFrame()
 else:
     try:
-        # PASSA AS DATAS PARA O FILTRO
+        # Dados do funil (planilha)
         funnel_data = gs.get_funnel_data(start_date, end_date)
         leads_df = funnel_data['leads_df']
+        
+        # Dados do Meta Ads (API)
+        if meta.is_meta_configured():
+            meta_summary = meta.get_meta_summary(start_date, end_date)
+            meta_campaigns = meta.get_meta_campaigns(start_date, end_date)
+        else:
+            meta_summary = None
+            meta_campaigns = pd.DataFrame()
             
     except Exception as e:
         st.error(f"Erro ao carregar dados: {str(e)}")
-        st.info("Ativando modo demonstração...")
         funnel_data = load_data_demo()
         leads_df = pd.DataFrame()
+        meta_summary = None
+        meta_campaigns = pd.DataFrame()
+
+
+# ===========================================
+# MÉTRICAS DE INVESTIMENTO (META ADS)
+# ===========================================
+
+if meta_summary and not demo_mode:
+    st.markdown("## 💰 Investimento em Mídia")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(create_colored_metric_card(
+            "Valor Investido",
+            format_currency(meta_summary['valor_gasto']),
+            "💰",
+            "#0668E1"
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(create_colored_metric_card(
+            "Leads Gerados (Meta)",
+            format_number(meta_summary['leads']),
+            "👥",
+            "#8B5CF6"
+        ), unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(create_colored_metric_card(
+            "Custo por Lead",
+            format_currency(meta_summary['cpl']),
+            "💵",
+            "#10B981"
+        ), unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(create_colored_metric_card(
+            "Cliques",
+            format_number(meta_summary['cliques']),
+            "👆",
+            "#F59E0B"
+        ), unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Segunda linha de métricas
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(create_metric_card("Impressões", format_number(meta_summary['impressoes']), "👁️"), unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(create_metric_card("Alcance", format_number(meta_summary['alcance']), "📢"), unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(create_metric_card("CTR", format_percentage(meta_summary['ctr']), "📊"), unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(create_metric_card("CPC", format_currency(meta_summary['cpc']), "💳"), unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
 
 
 # ===========================================
@@ -354,7 +462,7 @@ with col4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Gráfico de funil
+# Gráfico de funil e taxas
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -395,7 +503,92 @@ with col2:
 
 st.markdown("---")
 
-tab_leads, tab_campanhas, tab_tabela = st.tabs(["📊 Visão Geral", "🎯 Por Campanha", "📋 Tabela de Leads"])
+tab_meta, tab_campanhas, tab_leads, tab_tabela = st.tabs(["📘 Meta Ads", "🎯 Por Campanha", "📊 Visão Geral", "📋 Tabela de Leads"])
+
+
+# ===========================================
+# ABA META ADS
+# ===========================================
+with tab_meta:
+    if not meta_campaigns.empty and not demo_mode:
+        st.markdown("### 📘 Performance Meta Ads (Facebook/Instagram)")
+        
+        # Agrupa por campanha
+        campaigns_grouped = meta.get_campaigns_by_name(meta_campaigns)
+        
+        if not campaigns_grouped.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = create_bar_chart(
+                    campaigns_grouped,
+                    'campanha',
+                    'valor_gasto',
+                    '💰 Investimento por Campanha',
+                    '#0668E1'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                fig = create_bar_chart(
+                    campaigns_grouped,
+                    'campanha',
+                    'leads',
+                    '👥 Leads por Campanha',
+                    '#8B5CF6'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Tabela de campanhas
+            st.markdown("### 📋 Detalhamento por Campanha")
+            
+            display_campaigns = campaigns_grouped.copy()
+            display_campaigns['valor_gasto'] = display_campaigns['valor_gasto'].apply(lambda x: f"R$ {x:,.2f}")
+            display_campaigns['cpl'] = display_campaigns['cpl'].apply(lambda x: f"R$ {x:,.2f}")
+            display_campaigns.columns = ['Campanha', 'Valor Gasto', 'Impressões', 'Cliques', 'Leads', 'CPL']
+            
+            st.dataframe(
+                display_campaigns.sort_values('Leads', ascending=False),
+                use_container_width=True,
+                hide_index=True
+            )
+    else:
+        if demo_mode:
+            st.info("📊 Modo demonstração ativado. Desative para ver os dados reais.")
+        elif not meta.is_meta_configured():
+            st.warning("⚠️ Meta Ads não configurado. Adicione as credenciais nos Secrets do Streamlit.")
+        else:
+            st.info("Nenhum dado encontrado para o período selecionado.")
+
+
+# ===========================================
+# ABA POR CAMPANHA (PLANILHA)
+# ===========================================
+with tab_campanhas:
+    if not leads_df.empty:
+        leads_por_campanha = gs.get_leads_by_campaign(leads_df)
+        
+        if not leads_por_campanha.empty:
+            st.markdown("### 🎯 Leads por Campanha (Planilha)")
+            
+            fig = create_bar_chart(
+                leads_por_campanha,
+                leads_por_campanha.columns[0],
+                'leads',
+                '📊 Leads por Campanha',
+                '#10B981'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.dataframe(
+                leads_por_campanha.sort_values('leads', ascending=False),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("Sem dados de campanha disponíveis.")
+    else:
+        st.info("Carregue os dados para ver análise por campanha.")
 
 
 # ===========================================
@@ -403,8 +596,6 @@ tab_leads, tab_campanhas, tab_tabela = st.tabs(["📊 Visão Geral", "🎯 Por C
 # ===========================================
 with tab_leads:
     if not leads_df.empty:
-        
-        # Métricas por plataforma
         st.markdown("### 📱 Leads por Plataforma")
         
         if 'plataforma' in leads_df.columns:
@@ -422,7 +613,6 @@ with tab_leads:
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Gráfico de leads por data
         col1, col2 = st.columns(2)
         
         with col1:
@@ -444,45 +634,12 @@ with tab_leads:
 
 
 # ===========================================
-# ABA POR CAMPANHA
-# ===========================================
-with tab_campanhas:
-    if not leads_df.empty:
-        leads_por_campanha = gs.get_leads_by_campaign(leads_df)
-        
-        if not leads_por_campanha.empty:
-            st.markdown("### 🎯 Performance por Campanha")
-            
-            fig = create_bar_chart(
-                leads_por_campanha,
-                leads_por_campanha.columns[0],
-                'leads',
-                '📊 Leads por Campanha',
-                '#10B981'
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Tabela de campanhas
-            st.markdown("### 📋 Detalhamento")
-            st.dataframe(
-                leads_por_campanha.sort_values('leads', ascending=False),
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Sem dados de campanha disponíveis.")
-    else:
-        st.info("Carregue os dados para ver análise por campanha.")
-
-
-# ===========================================
 # ABA TABELA DE LEADS
 # ===========================================
 with tab_tabela:
     if not leads_df.empty:
         st.markdown("### 📋 Todos os Leads")
         
-        # Filtro de plataforma
         if 'plataforma' in leads_df.columns:
             platform_filter = st.selectbox(
                 "Filtrar por plataforma:",
@@ -496,7 +653,6 @@ with tab_tabela:
         else:
             display_df = leads_df
         
-        # Seleciona colunas relevantes
         cols_to_show = []
         possible_cols = ['DATA / HORA', 'ORIGEM', 'CAMPANHA', 'NOME', 'TELEFONE', 'E-MAIL', 'plataforma']
         
@@ -516,7 +672,6 @@ with tab_tabela:
             height=500
         )
         
-        # Botão de download
         csv = display_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Baixar CSV",
