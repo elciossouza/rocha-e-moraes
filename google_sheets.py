@@ -100,6 +100,45 @@ def parse_date_flexible(date_value):
         return None
 
 
+def parse_currency_value(value):
+    """
+    Converte valores monetários em diferentes formatos para float
+    Exemplos: "R$ 1.500,00", "1500.00", "1.500", "1500", etc.
+    """
+    if pd.isna(value) or value is None:
+        return 0.0
+    
+    value_str = str(value).strip()
+    
+    if value_str == '' or value_str.lower() == 'n/a':
+        return 0.0
+    
+    # Remove símbolos de moeda e espaços
+    value_str = value_str.replace('R$', '').replace('$', '').replace(' ', '')
+    
+    # Detecta formato brasileiro (1.234,56) vs americano (1,234.56)
+    if ',' in value_str and '.' in value_str:
+        # Se vírgula vem depois do ponto, é formato brasileiro
+        if value_str.rfind(',') > value_str.rfind('.'):
+            value_str = value_str.replace('.', '').replace(',', '.')
+        else:
+            value_str = value_str.replace(',', '')
+    elif ',' in value_str:
+        # Só tem vírgula - pode ser decimal brasileiro ou separador de milhar
+        parts = value_str.split(',')
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            # Provavelmente decimal brasileiro (1500,00)
+            value_str = value_str.replace(',', '.')
+        else:
+            # Provavelmente separador de milhar americano
+            value_str = value_str.replace(',', '')
+    
+    try:
+        return float(value_str)
+    except ValueError:
+        return 0.0
+
+
 @st.cache_data(ttl=300)
 def get_sheet_data(sheet_name: str) -> pd.DataFrame:
     """
@@ -114,6 +153,40 @@ def get_sheet_data(sheet_name: str) -> pd.DataFrame:
         worksheet = spreadsheet.worksheet(sheet_name)
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
+        
+        return df
+        
+    except gspread.exceptions.WorksheetNotFound:
+        st.warning(f"Aba '{sheet_name}' não encontrada na planilha.")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Erro ao buscar dados da aba '{sheet_name}': {str(e)}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def get_sheet_data_raw(sheet_name: str) -> pd.DataFrame:
+    """
+    Busca dados de uma aba específica usando get_all_values (raw)
+    Útil quando as colunas não têm cabeçalho ou precisamos de colunas específicas por letra
+    """
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return pd.DataFrame()
+        
+        spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_values()
+        
+        if len(data) < 2:
+            return pd.DataFrame()
+        
+        # Primeira linha como cabeçalho
+        headers = data[0]
+        rows = data[1:]
+        
+        df = pd.DataFrame(rows, columns=headers)
         
         return df
         
@@ -246,6 +319,155 @@ def get_contratos_fechados() -> pd.DataFrame:
     df = get_sheet_data(config.SHEET_NAME_CONVERTIDOS)
     df = process_dataframe_dates(df)
     return df
+
+
+@st.cache_data(ttl=300)
+def get_contratos_com_valores() -> pd.DataFrame:
+    """
+    Busca contratos fechados com valores da aba 'CONTRATOS FECHADOS'
+    Coluna A = Data, Coluna Q = Valor do contrato
+    """
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return pd.DataFrame()
+        
+        spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
+        
+        # Tenta encontrar a aba de contratos
+        sheet_names_to_try = ['CONTRATOS FECHADOS', 'Contratos Fechados', 'contratos fechados', 'CONTRATOS', 'Contratos']
+        
+        worksheet = None
+        for name in sheet_names_to_try:
+            try:
+                worksheet = spreadsheet.worksheet(name)
+                break
+            except gspread.exceptions.WorksheetNotFound:
+                continue
+        
+        if worksheet is None:
+            # Se não encontrar, tenta usar a aba de convertidos do config
+            if hasattr(config, 'SHEET_NAME_CONVERTIDOS'):
+                try:
+                    worksheet = spreadsheet.worksheet(config.SHEET_NAME_CONVERTIDOS)
+                except:
+                    return pd.DataFrame()
+            else:
+                return pd.DataFrame()
+        
+        # Busca todos os valores
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) < 2:
+            return pd.DataFrame()
+        
+        # Pega os cabeçalhos
+        headers = all_values[0]
+        rows = all_values[1:]
+        
+        # Cria DataFrame
+        df = pd.DataFrame(rows, columns=headers)
+        
+        # Identifica a coluna de data (coluna A ou primeira coluna)
+        date_col = df.columns[0] if len(df.columns) > 0 else None
+        
+        # Identifica a coluna de valor (coluna Q = índice 16, ou procura por nome)
+        value_col = None
+        
+        # Primeiro tenta pela posição (coluna Q = índice 16)
+        if len(df.columns) > 16:
+            value_col = df.columns[16]
+        
+        # Se não encontrou ou está vazia, procura por nome
+        if value_col is None or (value_col and df[value_col].replace('', pd.NA).dropna().empty):
+            value_columns = ['VALOR', 'Valor', 'valor', 'VALOR DO CONTRATO', 'Valor do Contrato', 
+                           'VALOR CONTRATO', 'Valor Contrato', 'RECEITA', 'Receita', 'TOTAL', 'Total']
+            for col in value_columns:
+                if col in df.columns:
+                    value_col = col
+                    break
+        
+        if date_col is None or value_col is None:
+            return pd.DataFrame()
+        
+        # Cria DataFrame limpo
+        df_clean = pd.DataFrame()
+        df_clean['data_original'] = df[date_col]
+        df_clean['valor_original'] = df[value_col]
+        
+        # Processa as datas
+        df_clean['data_parsed'] = df_clean['data_original'].apply(parse_date_flexible)
+        df_clean['data'] = df_clean['data_parsed'].apply(lambda x: x.date() if x else None)
+        df_clean['mes'] = df_clean['data_parsed'].apply(lambda x: x.month if x else None)
+        df_clean['ano'] = df_clean['data_parsed'].apply(lambda x: x.year if x else None)
+        df_clean['mes_ano'] = df_clean['data_parsed'].apply(
+            lambda x: x.strftime('%Y-%m') if x else None
+        )
+        df_clean['mes_ano_label'] = df_clean['data_parsed'].apply(
+            lambda x: x.strftime('%b/%Y') if x else None
+        )
+        
+        # Processa os valores
+        df_clean['valor_contrato'] = df_clean['valor_original'].apply(parse_currency_value)
+        
+        # Remove linhas sem data ou valor válido
+        df_clean = df_clean[df_clean['data'].notna()]
+        df_clean = df_clean[df_clean['valor_contrato'] > 0]
+        
+        return df_clean
+        
+    except Exception as e:
+        st.error(f"Erro ao buscar contratos com valores: {str(e)}")
+        return pd.DataFrame()
+
+
+def get_receita_por_periodo(start_date=None, end_date=None) -> dict:
+    """
+    Calcula a receita total e por mês dentro do período
+    """
+    df = get_contratos_com_valores()
+    
+    if df.empty:
+        return {
+            'receita_total': 0,
+            'quantidade_contratos': 0,
+            'ticket_medio': 0,
+            'receita_por_mes': pd.DataFrame()
+        }
+    
+    # Aplica filtro de data se fornecido
+    if start_date is not None and end_date is not None:
+        df = filter_by_date(df, start_date, end_date)
+    
+    if df.empty:
+        return {
+            'receita_total': 0,
+            'quantidade_contratos': 0,
+            'ticket_medio': 0,
+            'receita_por_mes': pd.DataFrame()
+        }
+    
+    # Calcula totais
+    receita_total = df['valor_contrato'].sum()
+    quantidade = len(df)
+    ticket_medio = receita_total / quantidade if quantidade > 0 else 0
+    
+    # Agrupa por mês
+    receita_mes = df.groupby(['mes_ano', 'mes_ano_label']).agg({
+        'valor_contrato': 'sum',
+        'data': 'count'
+    }).reset_index()
+    
+    receita_mes.columns = ['mes_ano', 'mes_ano_label', 'receita', 'contratos']
+    receita_mes = receita_mes.sort_values('mes_ano')
+    
+    return {
+        'receita_total': receita_total,
+        'quantidade_contratos': quantidade,
+        'ticket_medio': ticket_medio,
+        'receita_por_mes': receita_mes,
+        'df_contratos': df
+    }
 
 
 def get_funnel_data(start_date=None, end_date=None) -> dict:
