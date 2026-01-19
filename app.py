@@ -295,16 +295,7 @@ def create_roas_line_chart(receita_df, investimento_por_mes):
 
 def is_google_ads_configured():
     """Verifica se o Google Ads está configurado"""
-    try:
-        return bool(
-            hasattr(config, 'GOOGLE_ADS_DEVELOPER_TOKEN') and config.GOOGLE_ADS_DEVELOPER_TOKEN and
-            hasattr(config, 'GOOGLE_ADS_CLIENT_ID') and config.GOOGLE_ADS_CLIENT_ID and
-            hasattr(config, 'GOOGLE_ADS_CLIENT_SECRET') and config.GOOGLE_ADS_CLIENT_SECRET and
-            hasattr(config, 'GOOGLE_ADS_REFRESH_TOKEN') and config.GOOGLE_ADS_REFRESH_TOKEN and
-            hasattr(config, 'GOOGLE_ADS_CUSTOMER_ID') and config.GOOGLE_ADS_CUSTOMER_ID
-        )
-    except:
-        return False
+    return gads.is_google_ads_configured()
 
 
 # ===========================================
@@ -363,11 +354,9 @@ with st.sidebar:
     
     # DEBUG - Google Ads
     with st.expander("🔧 Debug Google Ads"):
-        st.write(f"**developer_token:** {'✅' if hasattr(config, 'GOOGLE_ADS_DEVELOPER_TOKEN') and config.GOOGLE_ADS_DEVELOPER_TOKEN else '❌'}")
-        st.write(f"**client_id:** {'✅' if hasattr(config, 'GOOGLE_ADS_CLIENT_ID') and config.GOOGLE_ADS_CLIENT_ID else '❌'}")
-        st.write(f"**client_secret:** {'✅' if hasattr(config, 'GOOGLE_ADS_CLIENT_SECRET') and config.GOOGLE_ADS_CLIENT_SECRET else '❌'}")
-        st.write(f"**refresh_token:** {'✅' if hasattr(config, 'GOOGLE_ADS_REFRESH_TOKEN') and config.GOOGLE_ADS_REFRESH_TOKEN else '❌'}")
-        st.write(f"**customer_id:** {getattr(config, 'GOOGLE_ADS_CUSTOMER_ID', 'N/A')}")
+        debug_gads = gads.debug_google_ads_connection()
+        for key, value in debug_gads.items():
+            st.write(f"**{key}:** {value}")
     
     st.markdown("---")
     
