@@ -442,13 +442,19 @@ if demo_mode:
     google_summary = {'cost': 3500, 'clicks': 1800, 'impressions': 55000, 'conversions': 85, 'ctr': 3.27, 'cpc': 1.94}
     google_campaigns = pd.DataFrame()
     receita_data = {'receita_total': 45000, 'quantidade_contratos': 23, 'ticket_medio': 1956.52, 'receita_por_mes': pd.DataFrame()}
+    investimento_roas = {'meta_ads': 5000, 'google_ads': 3500, 'total_investido': 8500, 'receita_contratos': 45000, 'roas': 5.29}
+    investimento_por_mes = pd.DataFrame()
 else:
     try:
         funnel_data = gs.get_funnel_data(start_date, end_date)
         leads_df = funnel_data['leads_df']
         receita_data = gs.get_receita_por_periodo(start_date, end_date)
         
-        # Meta Ads
+        # Busca dados de investimento da aba ROAS
+        investimento_roas = gs.get_investimento_roas()
+        investimento_por_mes = gs.get_investimento_por_mes()
+        
+        # Meta Ads (tenta API, senão usa planilha)
         if meta.is_meta_configured():
             meta_summary = meta.get_meta_summary(start_date, end_date)
             meta_campaigns = meta.get_meta_campaigns(start_date, end_date)
@@ -456,7 +462,7 @@ else:
             meta_summary = None
             meta_campaigns = pd.DataFrame()
         
-        # Google Ads
+        # Google Ads (tenta API, senão usa planilha)
         if is_google_ads_configured():
             google_summary = gads.get_google_ads_metrics(start_date_str, end_date_str)
             google_campaigns = gads.get_google_ads_campaigns(start_date_str, end_date_str)
@@ -473,6 +479,8 @@ else:
         google_summary = None
         google_campaigns = pd.DataFrame()
         receita_data = {'receita_total': 0, 'quantidade_contratos': 0, 'ticket_medio': 0, 'receita_por_mes': pd.DataFrame()}
+        investimento_roas = {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0}
+        investimento_por_mes = pd.DataFrame()
 
 
 # ===========================================
@@ -481,14 +489,29 @@ else:
 
 st.markdown("## 💰 Retorno sobre Investimento (ROAS)")
 
-receita_total = receita_data.get('receita_total', 0)
-quantidade_contratos = receita_data.get('quantidade_contratos', 0)
-ticket_medio = receita_data.get('ticket_medio', 0)
-
-# Investimentos
-investimento_meta = meta_summary.get('valor_gasto', 0) if meta_summary else 0
-investimento_google = google_summary.get('cost', 0) if google_summary else 0
-investimento_total = investimento_meta + investimento_google
+# Usa dados da planilha ROAS primeiro, depois APIs como fallback
+if investimento_roas.get('total_investido', 0) > 0:
+    # Dados da planilha ROAS
+    investimento_meta = investimento_roas.get('meta_ads', 0)
+    investimento_google = investimento_roas.get('google_ads', 0)
+    investimento_total = investimento_roas.get('total_investido', 0)
+    receita_total = investimento_roas.get('receita_contratos', 0)
+    
+    # Se tiver dados de receita da aba CONTRATOS FECHADOS, usa esse
+    if receita_data.get('receita_total', 0) > 0:
+        receita_total = receita_data.get('receita_total', 0)
+    
+    quantidade_contratos = receita_data.get('quantidade_contratos', 0)
+    ticket_medio = receita_data.get('ticket_medio', 0)
+else:
+    # Fallback para APIs
+    receita_total = receita_data.get('receita_total', 0)
+    quantidade_contratos = receita_data.get('quantidade_contratos', 0)
+    ticket_medio = receita_data.get('ticket_medio', 0)
+    
+    investimento_meta = meta_summary.get('valor_gasto', 0) if meta_summary else 0
+    investimento_google = google_summary.get('cost', 0) if google_summary else 0
+    investimento_total = investimento_meta + investimento_google
 
 # ROAS
 roas = receita_total / investimento_total if investimento_total > 0 else 0
@@ -519,55 +542,113 @@ with col3:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Gráficos ROAS Mensal
-receita_por_mes = receita_data.get('receita_por_mes', pd.DataFrame())
-
-if not receita_por_mes.empty and not demo_mode:
-    investimento_por_mes = {}
-    
-    # Meta por mês
-    if not meta_campaigns.empty and 'data' in meta_campaigns.columns:
-        meta_campaigns_copy = meta_campaigns.copy()
-        meta_campaigns_copy['mes_ano'] = pd.to_datetime(meta_campaigns_copy['data']).dt.strftime('%Y-%m')
-        for mes, valor in meta_campaigns_copy.groupby('mes_ano')['valor_gasto'].sum().items():
-            investimento_por_mes[mes] = investimento_por_mes.get(mes, 0) + valor
-    
-    # Google por mês (proporcional)
-    if investimento_google > 0:
-        dias_periodo = (end_date - start_date).days + 1
-        valor_diario_google = investimento_google / dias_periodo
-        for mes_ano in receita_por_mes['mes_ano'].unique():
-            if mes_ano:
-                try:
-                    ano, mes = mes_ano.split('-')
-                    from calendar import monthrange
-                    dias_mes = monthrange(int(ano), int(mes))[1]
-                    investimento_por_mes[mes_ano] = investimento_por_mes.get(mes_ano, 0) + (valor_diario_google * dias_mes)
-                except:
-                    pass
-    
+# Gráficos ROAS Mensal (usando dados da planilha)
+if not investimento_por_mes.empty and not demo_mode:
     col1, col2 = st.columns(2)
     
     with col1:
-        st.plotly_chart(create_roas_monthly_chart(receita_por_mes, investimento_por_mes), use_container_width=True)
+        # Gráfico de barras - Investimento vs Receita
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            name='Investimento',
+            x=investimento_por_mes['mes'],
+            y=investimento_por_mes['total_investido'],
+            marker_color='#EF4444',
+            text=investimento_por_mes['total_investido'].apply(lambda x: f'R$ {x:,.0f}'.replace(',', '.')),
+            textposition='outside'
+        ))
+        
+        fig.add_trace(go.Bar(
+            name='Receita',
+            x=investimento_por_mes['mes'],
+            y=investimento_por_mes['receita'],
+            marker_color='#10B981',
+            text=investimento_por_mes['receita'].apply(lambda x: f'R$ {x:,.0f}'.replace(',', '.')),
+            textposition='outside'
+        ))
+        
+        fig.update_layout(
+            title='📊 Investimento vs Receita por Mês',
+            barmode='group',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="Plus Jakarta Sans", size=12),
+            margin=dict(l=20, r=20, t=60, b=20),
+            height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(tickformat=',.0f', tickprefix='R$ ')
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        st.plotly_chart(create_roas_line_chart(receita_por_mes, investimento_por_mes), use_container_width=True)
+        # Gráfico de linha - ROAS
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=investimento_por_mes['mes'],
+            y=investimento_por_mes['roas'],
+            mode='lines+markers+text',
+            name='ROAS',
+            line=dict(color='#8B5CF6', width=3),
+            marker=dict(size=12, color='#8B5CF6'),
+            text=investimento_por_mes['roas'].apply(lambda x: f'{x:.2f}x'),
+            textposition='top center'
+        ))
+        
+        fig.add_hline(y=1, line_dash="dash", line_color="#6c757d", 
+                      annotation_text="Break-even (1.0x)", annotation_position="right")
+        
+        fig.update_layout(
+            title='📈 ROAS Mensal',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="Plus Jakarta Sans", size=12),
+            margin=dict(l=20, r=20, t=60, b=20),
+            height=400,
+            yaxis=dict(ticksuffix='x')
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
     
+    # Tabela detalhada
     with st.expander("📋 Detalhamento Mensal"):
-        df_det = receita_por_mes.copy()
-        df_det['investimento'] = df_det['mes_ano'].map(investimento_por_mes).fillna(0)
-        df_det['roas'] = df_det.apply(lambda r: r['receita'] / r['investimento'] if r['investimento'] > 0 else 0, axis=1)
-        df_det['lucro'] = df_det['receita'] - df_det['investimento']
+        df_show = investimento_por_mes.copy()
+        df_show['lucro'] = df_show['receita'] - df_show['total_investido']
         
-        df_show = df_det[['mes_ano_label', 'contratos', 'investimento', 'receita', 'lucro', 'roas']].copy()
-        df_show.columns = ['Mês', 'Contratos', 'Investimento', 'Receita', 'Lucro', 'ROAS']
-        df_show['Investimento'] = df_show['Investimento'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        df_show['Receita'] = df_show['Receita'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        df_show['Lucro'] = df_show['Lucro'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        df_show['ROAS'] = df_show['ROAS'].apply(lambda x: f"{x:.2f}x")
+        df_exibir = df_show[['mes', 'meta_ads', 'google_ads', 'total_investido', 'receita', 'lucro', 'roas']].copy()
+        df_exibir.columns = ['Mês', 'Meta Ads', 'Google Ads', 'Investimento', 'Receita', 'Lucro', 'ROAS']
         
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        df_exibir['Meta Ads'] = df_exibir['Meta Ads'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        df_exibir['Google Ads'] = df_exibir['Google Ads'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        df_exibir['Investimento'] = df_exibir['Investimento'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        df_exibir['Receita'] = df_exibir['Receita'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        df_exibir['Lucro'] = df_exibir['Lucro'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        df_exibir['ROAS'] = df_exibir['ROAS'].apply(lambda x: f"{x:.2f}x")
+        
+        st.dataframe(df_exibir, use_container_width=True, hide_index=True)
+
+elif not demo_mode:
+    # Sem dados mensais, mostra apenas os gráficos com dados de receita
+    receita_por_mes = receita_data.get('receita_por_mes', pd.DataFrame())
+    
+    if not receita_por_mes.empty:
+        investimento_por_mes_calc = {}
+        
+        if not meta_campaigns.empty and 'data' in meta_campaigns.columns:
+            meta_campaigns_copy = meta_campaigns.copy()
+            meta_campaigns_copy['mes_ano'] = pd.to_datetime(meta_campaigns_copy['data']).dt.strftime('%Y-%m')
+            for mes, valor in meta_campaigns_copy.groupby('mes_ano')['valor_gasto'].sum().items():
+                investimento_por_mes_calc[mes] = investimento_por_mes_calc.get(mes, 0) + valor
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.plotly_chart(create_roas_monthly_chart(receita_por_mes, investimento_por_mes_calc), use_container_width=True)
+        
+        with col2:
+            st.plotly_chart(create_roas_line_chart(receita_por_mes, investimento_por_mes_calc), use_container_width=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
