@@ -1,6 +1,5 @@
 """
 Módulo de conexão com Meta Ads API
-Responsável por buscar dados de campanhas do Facebook/Instagram Ads
 """
 import requests
 import pandas as pd
@@ -8,28 +7,22 @@ import streamlit as st
 from datetime import datetime, timedelta
 import config
 
-# URL base da API do Meta
 META_API_URL = "https://graph.facebook.com/v18.0"
 
 
 def get_meta_credentials():
-    """
-    Obtém as credenciais do Meta Ads dos secrets ou variáveis de ambiente
-    """
     access_token = ""
     ad_account_id = ""
     
-    # Tenta obter dos secrets do Streamlit
     try:
         if hasattr(st, 'secrets'):
             if "META_ACCESS_TOKEN" in st.secrets:
-                access_token = st.secrets["META_ACCESS_TOKEN"]
+                access_token = str(st.secrets["META_ACCESS_TOKEN"])
             if "META_AD_ACCOUNT_ID" in st.secrets:
-                ad_account_id = st.secrets["META_AD_ACCOUNT_ID"]
+                ad_account_id = str(st.secrets["META_AD_ACCOUNT_ID"])
     except Exception as e:
-        pass
+        st.error(f"Erro ao ler secrets: {e}")
     
-    # Fallback para config
     if not access_token:
         access_token = getattr(config, 'META_ACCESS_TOKEN', '')
     if not ad_account_id:
@@ -39,31 +32,40 @@ def get_meta_credentials():
 
 
 def is_meta_configured():
-    """
-    Verifica se as credenciais do Meta estão configuradas
-    """
     access_token, ad_account_id = get_meta_credentials()
-    return bool(access_token and ad_account_id and len(access_token) > 10 and len(ad_account_id) > 5)
+    token_len = len(access_token) if access_token else 0
+    account_len = len(ad_account_id) if ad_account_id else 0
+    return bool(access_token and ad_account_id and token_len > 10 and account_len > 5)
+
+
+def debug_meta_connection():
+    access_token, ad_account_id = get_meta_credentials()
+    
+    info = {
+        "token_encontrado": bool(access_token),
+        "token_tamanho": len(access_token) if access_token else 0,
+        "token_inicio": access_token[:10] + "..." if access_token and len(access_token) > 10 else "N/A",
+        "account_id": ad_account_id if ad_account_id else "N/A",
+        "secrets_disponivel": hasattr(st, 'secrets'),
+    }
+    
+    try:
+        if hasattr(st, 'secrets'):
+            info["meta_token_in_secrets"] = "META_ACCESS_TOKEN" in st.secrets
+            info["meta_account_in_secrets"] = "META_AD_ACCOUNT_ID" in st.secrets
+    except:
+        pass
+    
+    return info
 
 
 @st.cache_data(ttl=300)
 def get_meta_campaigns(start_date, end_date):
-    """
-    Busca dados de campanhas do Meta Ads
-    
-    Args:
-        start_date: Data inicial (date ou datetime)
-        end_date: Data final (date ou datetime)
-    
-    Returns:
-        DataFrame com dados das campanhas
-    """
     access_token, ad_account_id = get_meta_credentials()
     
     if not access_token or not ad_account_id:
         return pd.DataFrame()
     
-    # Formata as datas
     if hasattr(start_date, 'strftime'):
         start_str = start_date.strftime('%Y-%m-%d')
     else:
@@ -74,7 +76,6 @@ def get_meta_campaigns(start_date, end_date):
     else:
         end_str = str(end_date)
     
-    # Endpoint para insights de campanhas
     url = f"{META_API_URL}/{ad_account_id}/insights"
     
     params = {
@@ -82,7 +83,7 @@ def get_meta_campaigns(start_date, end_date):
         'level': 'campaign',
         'fields': 'campaign_name,campaign_id,spend,impressions,clicks,reach,actions,cost_per_action_type,ctr,cpc',
         'time_range': f'{{"since":"{start_str}","until":"{end_str}"}}',
-        'time_increment': 1,  # Dados diários
+        'time_increment': 1,
         'limit': 500
     }
     
@@ -97,7 +98,6 @@ def get_meta_campaigns(start_date, end_date):
         if 'data' not in data or len(data['data']) == 0:
             return pd.DataFrame()
         
-        # Processa os dados
         campaigns = []
         for item in data['data']:
             campaign = {
@@ -112,7 +112,6 @@ def get_meta_campaigns(start_date, end_date):
                 'cpc': float(item.get('cpc', 0)) if item.get('cpc') else 0,
             }
             
-            # Extrai leads das ações
             actions = item.get('actions', [])
             leads = 0
             for action in actions:
@@ -120,7 +119,6 @@ def get_meta_campaigns(start_date, end_date):
                     leads += int(action.get('value', 0))
             campaign['leads'] = leads
             
-            # Calcula CPL
             if leads > 0:
                 campaign['cpl'] = campaign['valor_gasto'] / leads
             else:
@@ -130,7 +128,6 @@ def get_meta_campaigns(start_date, end_date):
         
         df = pd.DataFrame(campaigns)
         
-        # Converte data
         if 'data' in df.columns and not df.empty:
             df['data'] = pd.to_datetime(df['data']).dt.date
         
@@ -143,15 +140,11 @@ def get_meta_campaigns(start_date, end_date):
 
 @st.cache_data(ttl=300)
 def get_meta_adsets(start_date, end_date):
-    """
-    Busca dados de conjuntos de anúncios do Meta Ads
-    """
     access_token, ad_account_id = get_meta_credentials()
     
     if not access_token or not ad_account_id:
         return pd.DataFrame()
     
-    # Formata as datas
     if hasattr(start_date, 'strftime'):
         start_str = start_date.strftime('%Y-%m-%d')
     else:
@@ -189,7 +182,6 @@ def get_meta_adsets(start_date, end_date):
                 'cliques': int(item.get('clicks', 0)),
             }
             
-            # Extrai leads
             actions = item.get('actions', [])
             leads = 0
             for action in actions:
@@ -212,15 +204,11 @@ def get_meta_adsets(start_date, end_date):
 
 @st.cache_data(ttl=300)
 def get_meta_summary(start_date, end_date):
-    """
-    Retorna resumo dos dados do Meta Ads
-    """
     access_token, ad_account_id = get_meta_credentials()
     
     if not access_token or not ad_account_id:
         return None
     
-    # Formata as datas
     if hasattr(start_date, 'strftime'):
         start_str = start_date.strftime('%Y-%m-%d')
     else:
@@ -252,7 +240,6 @@ def get_meta_summary(start_date, end_date):
         
         item = data['data'][0]
         
-        # Extrai leads
         actions = item.get('actions', [])
         leads = 0
         for action in actions:
@@ -279,10 +266,7 @@ def get_meta_summary(start_date, end_date):
         return None
 
 
-def get_campaigns_by_name(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Agrupa campanhas por nome
-    """
+def get_campaigns_by_name(df):
     if df.empty:
         return pd.DataFrame()
     
@@ -293,7 +277,6 @@ def get_campaigns_by_name(df: pd.DataFrame) -> pd.DataFrame:
         'leads': 'sum'
     }).reset_index()
     
-    # Recalcula CPL
     grouped['cpl'] = grouped.apply(
         lambda row: row['valor_gasto'] / row['leads'] if row['leads'] > 0 else 0, 
         axis=1
