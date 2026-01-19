@@ -28,11 +28,17 @@ GOOGLE_SHEETS_CREDENTIALS_FILE = get_config("GOOGLE_SHEETS_CREDENTIALS_FILE", "c
 SPREADSHEET_ID = get_config("SPREADSHEET_ID", "")
 
 # Nomes das abas na planilha
-SHEET_NAME_META_LEADS = get_config("SHEET_NAME_META_LEADS", "Meta Ads Leads")
+SHEET_NAME_LEADS = get_config("SHEET_NAME_LEADS", "Rocha & Moraes | ADVOGADOS")
+SHEET_NAME_QUALIFICADOS = get_config("SHEET_NAME_QUALIFICADOS", "LEADS QUALIFICADOS")
+SHEET_NAME_DESQUALIFICADOS = get_config("SHEET_NAME_DESQUALIFICADOS", "LEADS DESQUALIFICADOS")
+SHEET_NAME_CONVERTIDOS = get_config("SHEET_NAME_CONVERTIDOS", "CONTRATOS FECHADOS")
+
+# Compatibilidade com código antigo
+SHEET_NAME_META_LEADS = get_config("SHEET_NAME_META_LEADS", SHEET_NAME_LEADS)
 SHEET_NAME_GOOGLE_LEADS = get_config("SHEET_NAME_GOOGLE_LEADS", "Google Ads Leads")
 
 # ===========================================
-# GOOGLE ADS API
+# GOOGLE ADS API (OPCIONAL)
 # ===========================================
 GOOGLE_ADS_DEVELOPER_TOKEN = get_config("GOOGLE_ADS_DEVELOPER_TOKEN", "")
 GOOGLE_ADS_CLIENT_ID = get_config("GOOGLE_ADS_CLIENT_ID", "")
@@ -41,7 +47,7 @@ GOOGLE_ADS_REFRESH_TOKEN = get_config("GOOGLE_ADS_REFRESH_TOKEN", "")
 GOOGLE_ADS_CUSTOMER_ID = get_config("GOOGLE_ADS_CUSTOMER_ID", "")
 
 # ===========================================
-# META ADS API
+# META ADS API (OPCIONAL)
 # ===========================================
 META_ACCESS_TOKEN = get_config("META_ACCESS_TOKEN", "")
 META_AD_ACCOUNT_ID = get_config("META_AD_ACCOUNT_ID", "")
@@ -51,12 +57,11 @@ META_APP_SECRET = get_config("META_APP_SECRET", "")
 # ===========================================
 # DASHBOARD
 # ===========================================
-DASHBOARD_TITLE = os.getenv("DASHBOARD_TITLE", "Dashboard de Ads")
-COMPANY_NAME = os.getenv("COMPANY_NAME", "Minha Empresa")
+DASHBOARD_TITLE = get_config("DASHBOARD_TITLE", "Dashboard de Ads")
+COMPANY_NAME = get_config("COMPANY_NAME", "Minha Empresa")
 
 # ===========================================
 # MAPEAMENTO DE COLUNAS DA PLANILHA
-# Ajuste conforme os nomes das suas colunas
 # ===========================================
 COLUMN_MAPPING = {
     "data_hora": "DATA / HORA",
@@ -74,13 +79,17 @@ COLUMN_MAPPING = {
 # CORES DO DASHBOARD
 # ===========================================
 COLORS = {
-    "primary": "#1a73e8",      # Azul Google
-    "secondary": "#0668E1",     # Azul Meta/Facebook
-    "success": "#34A853",       # Verde
-    "warning": "#FBBC04",       # Amarelo
-    "danger": "#EA4335",        # Vermelho
-    "dark": "#202124",          # Cinza escuro
-    "light": "#F8F9FA",         # Cinza claro
-    "meta": "#0668E1",          # Azul Meta
-    "google": "#4285F4"         # Azul Google
+    "primary": "#1a73e8",
+    "secondary": "#0668E1",
+    "success": "#34A853",
+    "warning": "#FBBC04",
+    "danger": "#EA4335",
+    "dark": "#202124",
+    "light": "#F8F9FA",
+    "meta": "#0668E1",
+    "google": "#4285F4",
+    "funnel_leads": "#3B82F6",
+    "funnel_qualificados": "#8B5CF6",
+    "funnel_convertidos": "#10B981",
+    "funnel_desqualificados": "#EF4444"
 }
