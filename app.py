@@ -450,8 +450,8 @@ else:
         leads_df = funnel_data['leads_df']
         receita_data = gs.get_receita_por_periodo(start_date, end_date)
         
-        # Busca dados de investimento da aba ROAS
-        investimento_roas = gs.get_investimento_roas()
+        # Busca dados de investimento da aba ROAS (com filtro de datas)
+        investimento_roas = gs.get_investimento_roas(start_date, end_date)
         investimento_por_mes = gs.get_investimento_por_mes()
         
         # Meta Ads (tenta API, senão usa planilha)
