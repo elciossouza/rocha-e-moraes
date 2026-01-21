@@ -795,23 +795,22 @@ def get_leads_by_date(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_investimento_roas() -> dict:
+def get_investimento_roas(start_date=None, end_date=None) -> dict:
     """
     Busca dados de investimento da aba 'ROAS' da planilha
-    Retorna dicionário com investimentos por plataforma e mês
+    Estrutura: Coluna A = Data, Coluna B = Tipo, Coluna C = Valor
+    Filtra por período de datas
     """
     try:
         client = get_google_sheets_client()
         if client is None:
-            return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0, 'por_mes': []}
+            return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0}
         
         spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
         
         # Tenta encontrar a aba ROAS
-        sheet_names_to_try = ['ROAS', 'Roas', 'roas']
-        
         worksheet = None
-        for name in sheet_names_to_try:
+        for name in ['ROAS', 'Roas', 'roas']:
             try:
                 worksheet = spreadsheet.worksheet(name)
                 break
@@ -819,68 +818,92 @@ def get_investimento_roas() -> dict:
                 continue
         
         if worksheet is None:
-            return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0, 'por_mes': []}
+            return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0}
         
         # Busca todos os valores
         all_values = worksheet.get_all_values()
         
         if len(all_values) < 2:
-            return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0, 'por_mes': []}
+            return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0}
+        
+        # Converte datas de filtro
+        if start_date and hasattr(start_date, 'date'):
+            start_date = start_date.date()
+        if end_date and hasattr(end_date, 'date'):
+            end_date = end_date.date()
         
         # Inicializa resultado
-        resultado = {
-            'meta_ads': 0,
-            'google_ads': 0,
-            'total_investido': 0,
-            'receita_contratos': 0,
-            'roas': 0,
-            'por_mes': []
-        }
+        meta_ads_total = 0
+        google_ads_total = 0
+        contratos_total = 0
         
-        # Processa as linhas
-        for row in all_values[1:]:  # Pula o cabeçalho
+        # Processa as linhas (pula cabeçalho)
+        for row in all_values[1:]:
             if len(row) < 3:
                 continue
             
             data_str = row[0].strip() if row[0] else ''
-            descricao = row[1].strip().lower() if row[1] else ''
+            tipo = row[1].strip().lower() if row[1] else ''
             valor_str = row[2].strip() if row[2] else ''
+            
+            # Pula linhas vazias ou de texto
+            if not data_str or not tipo or not valor_str:
+                continue
+            
+            # Pula linha de "retorno sobre investimento" e "total investido"
+            if 'retorno' in tipo or 'total' in tipo:
+                continue
+            
+            # Pula linha de texto explicativo
+            if 'para cada' in tipo.lower():
+                continue
+            
+            # Parseia a data
+            data_parsed = parse_date_flexible(data_str)
+            if data_parsed is None:
+                continue
+            
+            data_date = data_parsed.date()
+            
+            # Aplica filtro de datas se fornecido
+            if start_date and end_date:
+                if data_date < start_date or data_date > end_date:
+                    continue
             
             # Converte valor
             valor = parse_currency_value(valor_str)
             
-            # Identifica o tipo de dado
-            if 'meta' in descricao or 'facebook' in descricao:
-                resultado['meta_ads'] += valor
-            elif 'google' in descricao:
-                resultado['google_ads'] += valor
-            elif 'total' in descricao and 'investido' in descricao:
-                resultado['total_investido'] = valor
-            elif 'contrato' in descricao:
-                resultado['receita_contratos'] = valor
-            elif 'retorno' in descricao or 'roas' in descricao:
-                resultado['roas'] = valor
+            # Identifica o tipo
+            if 'meta' in tipo or 'facebook' in tipo:
+                meta_ads_total += valor
+            elif 'google' in tipo:
+                google_ads_total += valor
+            elif 'contrato' in tipo:
+                contratos_total += valor
         
-        # Se não tiver total, calcula
-        if resultado['total_investido'] == 0:
-            resultado['total_investido'] = resultado['meta_ads'] + resultado['google_ads']
+        # Calcula totais
+        total_investido = meta_ads_total + google_ads_total
+        roas = contratos_total / total_investido if total_investido > 0 else 0
         
-        # Calcula ROAS se não tiver
-        if resultado['roas'] == 0 and resultado['total_investido'] > 0:
-            resultado['roas'] = resultado['receita_contratos'] / resultado['total_investido']
-        
-        return resultado
+        return {
+            'meta_ads': meta_ads_total,
+            'google_ads': google_ads_total,
+            'total_investido': total_investido,
+            'receita_contratos': contratos_total,
+            'roas': roas
+        }
         
     except Exception as e:
         st.error(f"Erro ao buscar dados de ROAS: {str(e)}")
-        return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0, 'por_mes': []}
+        return {'meta_ads': 0, 'google_ads': 0, 'total_investido': 0, 'receita_contratos': 0, 'roas': 0}
 
 
 @st.cache_data(ttl=300)
 def get_investimento_por_mes() -> pd.DataFrame:
     """
     Busca dados de investimento por mês da aba 'ROAS'
-    Estrutura esperada: colunas por mês com valores de Meta Ads e Google Ads
+    Agrupa por mês baseado na coluna de data
+    Estrutura: Coluna A = Data, Coluna B = Tipo, Coluna C = Valor
     """
     try:
         client = get_google_sheets_client()
@@ -907,52 +930,70 @@ def get_investimento_por_mes() -> pd.DataFrame:
         if len(all_values) < 2:
             return pd.DataFrame()
         
-        # Cabeçalho (meses nas colunas)
-        headers = all_values[0]
+        # Dicionário para agrupar por mês
+        dados_por_mes = {}
         
-        # Processa dados por mês
-        dados_mes = []
-        
-        # Para cada coluna de mês (começando da coluna C = índice 2)
-        for col_idx in range(2, len(headers)):
-            mes_nome = headers[col_idx].strip() if headers[col_idx] else None
-            if not mes_nome:
+        # Processa as linhas (pula cabeçalho)
+        for row in all_values[1:]:
+            if len(row) < 3:
                 continue
             
-            meta_ads = 0
-            google_ads = 0
-            receita = 0
+            data_str = row[0].strip() if row[0] else ''
+            tipo = row[1].strip().lower() if row[1] else ''
+            valor_str = row[2].strip() if row[2] else ''
             
-            # Procura valores nas linhas
-            for row in all_values[1:]:
-                if len(row) <= col_idx:
-                    continue
-                
-                descricao = row[1].strip().lower() if len(row) > 1 and row[1] else ''
-                valor_str = row[col_idx].strip() if row[col_idx] else ''
-                valor = parse_currency_value(valor_str)
-                
-                if 'meta' in descricao or 'facebook' in descricao:
-                    meta_ads = valor
-                elif 'google' in descricao:
-                    google_ads = valor
-                elif 'contrato' in descricao:
-                    receita = valor
+            # Pula linhas vazias ou de texto
+            if not data_str or not tipo or not valor_str:
+                continue
             
-            if meta_ads > 0 or google_ads > 0 or receita > 0:
-                total_investido = meta_ads + google_ads
-                roas = receita / total_investido if total_investido > 0 else 0
-                
-                dados_mes.append({
-                    'mes': mes_nome,
-                    'meta_ads': meta_ads,
-                    'google_ads': google_ads,
-                    'total_investido': total_investido,
-                    'receita': receita,
-                    'roas': roas
-                })
+            # Pula linhas que não são de investimento
+            if 'retorno' in tipo or 'total' in tipo or 'para cada' in tipo:
+                continue
+            
+            # Parseia a data
+            data_parsed = parse_date_flexible(data_str)
+            if data_parsed is None:
+                continue
+            
+            # Cria chave do mês (YYYY-MM)
+            mes_ano = data_parsed.strftime('%Y-%m')
+            mes_label = data_parsed.strftime('%b/%Y')
+            
+            # Inicializa mês se não existir
+            if mes_ano not in dados_por_mes:
+                dados_por_mes[mes_ano] = {
+                    'mes_ano': mes_ano,
+                    'mes': mes_label,
+                    'meta_ads': 0,
+                    'google_ads': 0,
+                    'receita': 0
+                }
+            
+            # Converte valor
+            valor = parse_currency_value(valor_str)
+            
+            # Identifica o tipo
+            if 'meta' in tipo or 'facebook' in tipo:
+                dados_por_mes[mes_ano]['meta_ads'] += valor
+            elif 'google' in tipo:
+                dados_por_mes[mes_ano]['google_ads'] += valor
+            elif 'contrato' in tipo:
+                dados_por_mes[mes_ano]['receita'] += valor
         
-        return pd.DataFrame(dados_mes)
+        if not dados_por_mes:
+            return pd.DataFrame()
+        
+        # Converte para DataFrame
+        df = pd.DataFrame(list(dados_por_mes.values()))
+        
+        # Calcula totais e ROAS
+        df['total_investido'] = df['meta_ads'] + df['google_ads']
+        df['roas'] = df.apply(lambda row: row['receita'] / row['total_investido'] if row['total_investido'] > 0 else 0, axis=1)
+        
+        # Ordena por mês
+        df = df.sort_values('mes_ano')
+        
+        return df
         
     except Exception as e:
         return pd.DataFrame()
