@@ -207,14 +207,29 @@ def process_dataframe_dates(df: pd.DataFrame) -> pd.DataFrame:
     
     df = df.copy()
     
-    # Tenta identificar coluna de data
-    date_columns = ['DATA / HORA', 'data_hora', 'DATA', 'Data', 'data', 'MÊS']
+    # Tenta identificar coluna de data (mais opções)
+    date_columns = [
+        'DATA / HORA', 'DATA/HORA', 'data_hora', 'DATA', 'Data', 'data', 
+        'MÊS', 'Mês', 'DATE', 'Date', 'DATETIME', 'Datetime',
+        'Data de Criação', 'DATA DE CRIAÇÃO', 'Criado em', 'CRIADO EM'
+    ]
     date_col = None
     
+    # Primeiro tenta pelo nome
     for col in date_columns:
         if col in df.columns:
             date_col = col
             break
+    
+    # Se não encontrou, tenta a primeira coluna
+    if date_col is None and len(df.columns) > 0:
+        first_col = df.columns[0]
+        # Verifica se a primeira coluna parece ter datas
+        sample = df[first_col].dropna().head(5).tolist()
+        for val in sample:
+            if parse_date_flexible(val) is not None:
+                date_col = first_col
+                break
     
     if date_col:
         df['data_parsed'] = df[date_col].apply(parse_date_flexible)
@@ -223,7 +238,7 @@ def process_dataframe_dates(df: pd.DataFrame) -> pd.DataFrame:
         df['ano'] = df['data_parsed'].apply(lambda x: x.year if x else None)
     
     # Identifica a origem (Meta ou Google)
-    origem_columns = ['ORIGEM', 'origem', 'Origem']
+    origem_columns = ['ORIGEM', 'origem', 'Origem', 'FONTE', 'Fonte', 'fonte', 'SOURCE', 'Source']
     origem_col = None
     
     for col in origem_columns:
@@ -258,16 +273,10 @@ def filter_by_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     """
     Filtra DataFrame por período de datas
     """
-    if df.empty or 'data' not in df.columns:
+    if df.empty:
         return df
     
     df = df.copy()
-    
-    # Remove linhas sem data válida
-    df = df[df['data'].notna()]
-    
-    if df.empty:
-        return df
     
     # Converte para date se necessário
     if hasattr(start_date, 'date'):
@@ -275,20 +284,90 @@ def filter_by_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     if hasattr(end_date, 'date'):
         end_date = end_date.date()
     
-    # Aplica o filtro
-    mask = (df['data'] >= start_date) & (df['data'] <= end_date)
+    # Verifica se tem coluna de data processada
+    if 'data' not in df.columns:
+        # Tenta processar as datas novamente
+        df = process_dataframe_dates(df)
     
-    return df[mask]
+    if 'data' not in df.columns:
+        # Se ainda não tem coluna de data, retorna o dataframe original
+        return df
+    
+    # Remove linhas sem data válida
+    df_filtered = df[df['data'].notna()].copy()
+    
+    if df_filtered.empty:
+        return df_filtered
+    
+    # Aplica o filtro de datas
+    mask = (df_filtered['data'] >= start_date) & (df_filtered['data'] <= end_date)
+    
+    return df_filtered[mask]
 
 
 @st.cache_data(ttl=300)
 def get_all_leads() -> pd.DataFrame:
     """
-    Busca todos os leads da aba principal
+    Busca todos os leads da aba principal 'Rocha & Moraes | ADVOGADOS'
+    Conta todas as linhas preenchidas a partir da linha 2
     """
-    df = get_sheet_data(config.SHEET_NAME_LEADS)
-    df = process_dataframe_dates(df)
-    return df
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return pd.DataFrame()
+        
+        spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
+        
+        # Tenta encontrar a aba de leads
+        sheet_names_to_try = [
+            'Rocha & Moraes | ADVOGADOS',
+            'Rocha & Moraes | Advogados', 
+            'LEADS',
+            'Leads',
+            getattr(config, 'SHEET_NAME_LEADS', '')
+        ]
+        
+        worksheet = None
+        for name in sheet_names_to_try:
+            if not name:
+                continue
+            try:
+                worksheet = spreadsheet.worksheet(name)
+                break
+            except gspread.exceptions.WorksheetNotFound:
+                continue
+        
+        if worksheet is None:
+            st.warning("Aba de leads não encontrada.")
+            return pd.DataFrame()
+        
+        # Busca todos os valores (raw) para garantir que pegamos tudo
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) < 2:
+            return pd.DataFrame()
+        
+        # Primeira linha como cabeçalho, resto como dados
+        headers = all_values[0]
+        rows = all_values[1:]  # A partir da linha 2
+        
+        # Remove linhas completamente vazias
+        rows = [row for row in rows if any(cell.strip() for cell in row)]
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        # Cria DataFrame
+        df = pd.DataFrame(rows, columns=headers)
+        
+        # Processa datas
+        df = process_dataframe_dates(df)
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Erro ao buscar leads: {str(e)}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -296,9 +375,53 @@ def get_leads_qualificados() -> pd.DataFrame:
     """
     Busca leads qualificados
     """
-    df = get_sheet_data(config.SHEET_NAME_QUALIFICADOS)
-    df = process_dataframe_dates(df)
-    return df
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return pd.DataFrame()
+        
+        spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
+        
+        # Tenta encontrar a aba
+        sheet_names_to_try = [
+            'LEADS QUALIFICADOS',
+            'Leads Qualificados',
+            'QUALIFICADOS',
+            'Qualificados',
+            getattr(config, 'SHEET_NAME_QUALIFICADOS', '')
+        ]
+        
+        worksheet = None
+        for name in sheet_names_to_try:
+            if not name:
+                continue
+            try:
+                worksheet = spreadsheet.worksheet(name)
+                break
+            except gspread.exceptions.WorksheetNotFound:
+                continue
+        
+        if worksheet is None:
+            return pd.DataFrame()
+        
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) < 2:
+            return pd.DataFrame()
+        
+        headers = all_values[0]
+        rows = [row for row in all_values[1:] if any(cell.strip() for cell in row)]
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(rows, columns=headers)
+        df = process_dataframe_dates(df)
+        
+        return df
+        
+    except Exception as e:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -306,9 +429,53 @@ def get_leads_desqualificados() -> pd.DataFrame:
     """
     Busca leads desqualificados
     """
-    df = get_sheet_data(config.SHEET_NAME_DESQUALIFICADOS)
-    df = process_dataframe_dates(df)
-    return df
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return pd.DataFrame()
+        
+        spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
+        
+        # Tenta encontrar a aba
+        sheet_names_to_try = [
+            'LEADS DESQUALIFICADOS',
+            'Leads Desqualificados',
+            'DESQUALIFICADOS',
+            'Desqualificados',
+            getattr(config, 'SHEET_NAME_DESQUALIFICADOS', '')
+        ]
+        
+        worksheet = None
+        for name in sheet_names_to_try:
+            if not name:
+                continue
+            try:
+                worksheet = spreadsheet.worksheet(name)
+                break
+            except gspread.exceptions.WorksheetNotFound:
+                continue
+        
+        if worksheet is None:
+            return pd.DataFrame()
+        
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) < 2:
+            return pd.DataFrame()
+        
+        headers = all_values[0]
+        rows = [row for row in all_values[1:] if any(cell.strip() for cell in row)]
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(rows, columns=headers)
+        df = process_dataframe_dates(df)
+        
+        return df
+        
+    except Exception as e:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -316,9 +483,53 @@ def get_contratos_fechados() -> pd.DataFrame:
     """
     Busca contratos fechados (convertidos)
     """
-    df = get_sheet_data(config.SHEET_NAME_CONVERTIDOS)
-    df = process_dataframe_dates(df)
-    return df
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return pd.DataFrame()
+        
+        spreadsheet = client.open_by_key(config.SPREADSHEET_ID)
+        
+        # Tenta encontrar a aba
+        sheet_names_to_try = [
+            'CONTRATOS FECHADOS',
+            'Contratos Fechados',
+            'CONVERTIDOS',
+            'Convertidos',
+            getattr(config, 'SHEET_NAME_CONVERTIDOS', '')
+        ]
+        
+        worksheet = None
+        for name in sheet_names_to_try:
+            if not name:
+                continue
+            try:
+                worksheet = spreadsheet.worksheet(name)
+                break
+            except gspread.exceptions.WorksheetNotFound:
+                continue
+        
+        if worksheet is None:
+            return pd.DataFrame()
+        
+        all_values = worksheet.get_all_values()
+        
+        if len(all_values) < 2:
+            return pd.DataFrame()
+        
+        headers = all_values[0]
+        rows = [row for row in all_values[1:] if any(cell.strip() for cell in row)]
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(rows, columns=headers)
+        df = process_dataframe_dates(df)
+        
+        return df
+        
+    except Exception as e:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -475,10 +686,14 @@ def get_funnel_data(start_date=None, end_date=None) -> dict:
     Retorna dados para o funil de conversão
     Com filtro de data opcional
     """
+    # Busca dados de todas as abas
     leads_df = get_all_leads()
     qualificados_df = get_leads_qualificados()
     desqualificados_df = get_leads_desqualificados()
     convertidos_df = get_contratos_fechados()
+    
+    # Conta total ANTES do filtro (para debug)
+    total_antes_filtro = len(leads_df)
     
     # Aplica filtro de data se fornecido
     if start_date is not None and end_date is not None:
@@ -495,7 +710,8 @@ def get_funnel_data(start_date=None, end_date=None) -> dict:
         'leads_df': leads_df,
         'qualificados_df': qualificados_df,
         'desqualificados_df': desqualificados_df,
-        'convertidos_df': convertidos_df
+        'convertidos_df': convertidos_df,
+        'total_antes_filtro': total_antes_filtro  # Para debug
     }
 
 
